@@ -1,10 +1,9 @@
 import unittest
 import context
+import uuid
 from tftp import storage
 
 class TestStorage(unittest.TestCase):
-    file = 0x0123456789ABCDEF
-    fileName = "a_filename"
     def test_singleton(self):
         a = storage.Storage()
         b = storage.Storage()
@@ -30,25 +29,30 @@ class TestStorage(unittest.TestCase):
             a.put)
 
     def test_putCreatesFile(self):
+        file = uuid.uuid1()
+        fileName = uuid.uuid1()
         a = storage.Storage()
-        a.put(self.fileName, self.file)
-        self.assertIn(self.fileName, a.store)
+        a.put(fileName, file)
+        self.assertIn(fileName, a.store)
 
     def test_getFile(self):
+        file = uuid.uuid1()
+        fileName = uuid.uuid1()
         a = storage.Storage()
-        a.put(self.fileName, self.file)
-        t = a.get(self.fileName)
-        self.assertEqual(self.file, t)
+        a.put(fileName, file)
+        t = a.get(fileName)
+        self.assertEqual(file, t)
 
-    def test_putRemovesFile(self):
+    def test_putFileExists(self):
+        file = uuid.uuid1()
+        fileName = uuid.uuid1()
         a = storage.Storage()
-        a.put(self.fileName, self.file)
-        self.assertIn(self.fileName, a.store)
-        a.put(self.fileName, None)
+        a.put(fileName, file)
+        self.assertIn(fileName, a.store)
         self.assertRaises(
-            storage.FileNotFoundException,
-            a.get,
-            self.fileName)
+            storage.FileExistsException,
+            a.put,
+            fileName)
 
 
 if __name__ == '__main__':

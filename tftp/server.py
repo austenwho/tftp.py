@@ -2,7 +2,6 @@ import logging
 import socket
 import socketserver
 import tftp.storage as storage
-import threading
 
 logging.basicConfig(format='%(asctime)s -- %(levelname)s: %(message)s', level=logging.DEBUG)
 
@@ -89,7 +88,8 @@ def packDATA(data, blockNum):
     b = bytearray()
     b.extend(Opcodes['DATA'].to_bytes(2, 'big'))
     b.extend(blockNum.to_bytes(2, 'big'))
-    b.extend(bytes(data, 'utf-8'))
+    if data:
+        b.extend(bytes(data, 'utf-8'))
     return b
 
 def unpackDATA(packet):
@@ -216,31 +216,28 @@ def handleRRQ(address, sock, filename, mode):
 
         # We're sending a DATA packet
         if sendDATA:
-            try:
-                logging.debug(
-                    "Client [{0}:{1}]: Sending datablock [{2}]"\
-                    .format(*address, dataBlock))
-                sendData(address, sock, data)
-                sendDATA = False
-                readACK = True
-                sendCount += 1
-            # Assume that a send timeout is a closed connection
-            except socket.timeout as ex:
-                # Try at least to alert the client before closing connection
-                err = packERROR(
-                    Errors['NOT_DEFINED'],
-                    str(ex))
-                sendData(address, sock, err)
-                logClientError(address, ex)
-                return
+            logging.debug(
+                "Client [{0}:{1}]: Sending datablock [{2}]"\
+                .format(*address, dataBlock))
+            sendData(address, sock, data)
+            sendDATA = False
+            readACK = True
+            sendCount += 1
 
         # We're waiting for an ACK packet
         if readACK:
-            try:
+            logging.debug(
+                "Client [{0}:{1}]: Reading socket for ACK for datablock [{2}]"\
+                .format(*address, dataBlock))
+            packet = sock.recv(1024)
+            if not packet:
+                # If we've timed out waiting for ACK, resend DATA
+                readACK = False
+                sendDATA = True
                 logging.debug(
-                    "Client [{0}:{1}]: Reading socket for ACK for datablock [{2}]"\
+                    "Client [{0}:{1}]: Timed out waiting for ACK [{2}]. Resending data."\
                     .format(*address, dataBlock))
-                packet = sock.recv(1024)
+            else:
                 try:
                     opcode, block = unpackACK(packet)
                     # Ignore all ACKs other than for current block
@@ -249,8 +246,8 @@ def handleRRQ(address, sock, filename, mode):
                         readACK = False
                         sendCount = 0
                         logging.debug(
-                            "Client [{0}:{1}]: Received ACK for datablock [{2}]"\
-                            .format(*address, block))
+                            "Client [{0}:{1}]: Received ACK for datablock [{2}]: {3}"\
+                            .format(*address, block, packet))
                     else:
                         logging.debug(
                             "Client [{0}:{1}]: Received ACK [{2}] for datablock [{3}]"\
@@ -263,13 +260,6 @@ def handleRRQ(address, sock, filename, mode):
                     sendData(address, sock, err)
                     logClientError(address, ex)
                     return
-            # If we've timed out waiting for ACK, resend DATA
-            except socket.timeout:
-                readACK = False
-                sendDATA = True
-                logging.debug(
-                    "Client [{0}:{1}]: Timed out waiting for ACK [{2}]. Resending data."\
-                    .format(*address, dataBlock))
 
         # If we've acked the last block and no more data, we're done!
         if ackBlock == dataBlock and end == -1:
@@ -288,7 +278,6 @@ def handleWRQ(address, sock, filename, mode):
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         packet, sock = self.request
-        #sock.settimeout(SOCKET_TIMEOUT)
 
         try:
             opcode, filename, mode = unpackRWRQ(packet)
@@ -319,5 +308,5 @@ class Handler(socketserver.BaseRequestHandler):
         else:
             handleWRQ(self.client_address, sock, filename, mode)
 
-class Server(socketserver.ThreadingMixIn, socketserver.UDPServer):
+class Server(socketserver.UDPServer):
     pass

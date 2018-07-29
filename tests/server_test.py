@@ -86,7 +86,7 @@ class TestServer(unittest.TestCase):
         store = storage.Storage()
         file = str(uuid.uuid1())
         # Guarantee file is at least 2 data packets long
-        file = file * ((512//len(file)) + 1)
+        file = (file * 512)[:1024]
         fileName = 'my_file'
         store.put(fileName, file)
 
@@ -107,6 +107,7 @@ class TestServer(unittest.TestCase):
         a = bytearray()
         a.extend(int(4).to_bytes(2, 'big'))
         a.extend(int(1).to_bytes(2, 'big'))
+        print("Sending: {}\n".format(a))
         self.client.sendto(a, self.send_to)
 
         # Get data block #2
@@ -115,6 +116,16 @@ class TestServer(unittest.TestCase):
 
         # Build and send ACK for data block #2
         a[3] = 2
+        print("Sending: {}\n".format(a))
+        self.client.sendto(a, self.send_to)
+
+        # Get data block #3
+        answer = self.client.recv(1024)
+        print("\n{}\n".format(answer))
+
+        # Build and send ACK for data block #3
+        a[3] = 3
+        print("Sending: {}\n".format(a))
         self.client.sendto(a, self.send_to)
 
 if __name__ == '__main__':

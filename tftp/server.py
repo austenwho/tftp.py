@@ -150,9 +150,6 @@ def packACK(blockNum):
     b.extend(blockNum.to_bytes(2, 'big'))
     return b
 
-def sendError(address, sock, err):
-    sock.sendto(err, address)
-
 def logClientError(address, error):
     logging.info(
         "Sent error to Client [{0}:{1}]: {2}"\
@@ -173,7 +170,7 @@ def handleRRQ(address, sock, filename, mode):
         err = packERROR(
             Errors['FILE_NOT_FOUND'],
             str(ex))
-        sendError(address, sock, err)
+        sendData(address, sock, err)
         logClientError(address, err)
         return
 
@@ -184,32 +181,33 @@ def handleRRQ(address, sock, filename, mode):
     ackBlock = 0
     fileSize = len(file)
     sendCount = 0
-    # s and e are initially incremented by 512 to give data[0:512] slice
-    s = -512
-    e = 0
+    # start and end are initially incremented by 512 to give file[0:512] slice
+    start = -512
+    end = 0
 
     # Control is returned to handler() by explicit return
     while True:
-        # Ready for new DATA packet
+        # Ready to build a new DATA packet
         if ackBlock == dataBlock:
             dataBlock += 1
-            s += 512
-            e += 512
-            if e > fileSize:
-                e = -1
+            start += 512
+            end += 512
+            if end > fileSize:
+                end = -1
 
-            data = packDATA(file[s:e], dataBlock)
+            data = packDATA(file[start:end], dataBlock)
             sendDATA = True
             logging.debug(
                 "Client [{0}:{1}]: Creating datablock [{2}] on file {3}[{4}:{5}]"\
-                .format(*address, dataBlock, filename, s, e))
+                .format(*address, dataBlock, filename, start, end))
 
+        # Don't loop forever trying to send the same data packet
         if sendCount >= MAX_BLOCK_SEND_ATTEMPTS:
             err = packERROR(
                 Errors['ACCESS_VIOLATION'],
                 "Maximum number of block send attempts reached: [{}]"\
                 .format(sendCount))
-            sendError(address, sock, err)
+            sendData(address, sock, err)
             logClientError(
                 address,
                 "Maximum number of block send attempts reached: [{}]"\
@@ -232,7 +230,7 @@ def handleRRQ(address, sock, filename, mode):
                 err = packERROR(
                     Errors['NOT_DEFINED'],
                     str(ex))
-                sendError(address, sock, err)
+                sendData(address, sock, err)
                 logClientError(address, ex)
                 return
 
@@ -262,7 +260,7 @@ def handleRRQ(address, sock, filename, mode):
                     err = packERROR(
                         Errors['ILLEGAL_OPERATION'],
                         str(ex))
-                    sendError(address, sock, err)
+                    sendData(address, sock, err)
                     logClientError(address, ex)
                     return
             # If we've timed out waiting for ACK, resend DATA
@@ -274,7 +272,7 @@ def handleRRQ(address, sock, filename, mode):
                     .format(*address, dataBlock))
 
         # If we've acked the last block and no more data, we're done!
-        if ackBlock == dataBlock and e == -1:
+        if ackBlock == dataBlock and end == -1:
             logging.debug(
                 "Client [{0}:{1}]: Finished sending file {2}"\
                 .format(*address, filename))
@@ -298,21 +296,21 @@ class Handler(socketserver.BaseRequestHandler):
             err = packERROR(
                 Errors['ACCESS_VIOLATION'],
                 str(ex))
-            sendError(self.client_address, sock, err)
+            sendData(self.client_address, sock, err)
             logClientError(self.client_address, err)
             return
         except storage.ErrorEmptyPath as ex:
             err = packERROR(
                 Errors['FILE_NOT_FOUND'],
                 str(ex))
-            sendError(self.client_address, sock, err)
+            sendData(self.client_address, sock, err)
             logClientError(self.client_address, err)
             return
         except (ErrorIllegalOperation, ErrorUnknownOpcode) as ex:
             err = packERROR(
                 Errors['ILLEGAL_OPERATION'],
                 str(ex))
-            sendError(self.client_address, sock, err)
+            sendData(self.client_address, sock, err)
             logClientError(self.client_address, err)
             return
 

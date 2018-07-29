@@ -5,20 +5,21 @@ import tftp.storage as storage
 import threading
 
 SOCKET_TIMEOUT = 5.0
+MAX_BLOCK_SEND_ATTEMPTS = 10
 
-class UnknownOpcodeException(Exception):
+class ErrorUnknownOpcode(Exception):
     pass
 
-class UnknownErrorCodeException(Exception):
+class ErrorUnknownErrorCode(Exception):
     pass
 
-class IllegalOperationException(Exception):
+class ErrorIllegalOperation(Exception):
     pass
 
-class UnknownModeException(Exception):
+class ErrorUnknownMode(Exception):
     pass
 
-class MalformedPacketException(Exception):
+class ErrorMalformedPacket(Exception):
     pass
 
 Opcodes = {
@@ -59,20 +60,20 @@ Modes = {
 def unpackOpcode(packet):
     """Returns an integer corresponding to Opcode encoded in packet.
 
-    Raises UnknownOpcodeException if Opcode is out of bounds.
+    Raises ErrorUnknownOpcode if Opcode is out of bounds.
     """
     c = int.from_bytes(packet[:2], byteorder='big')
     if c not in Opcodes:
-        raise UnknownOpcodeException("Unknown Opcode '{}'".format(c))
+        raise ErrorUnknownOpcode("Unknown Opcode '{}'".format(c))
     return c
 
 def packERROR(code, msg):
     """Returns a byte-ordered TFTP Error packet based on code and msg.
 
-    Raises UnknownErrorCodeException when code is out of bounds.
+    Raises ErrorUnknownErrorCode when code is out of bounds.
     """
     if code not in Errors:
-        raise UnknownErrorCodeException("Unknown error code '{}'".format(code))
+        raise ErrorUnknownErrorCode("Unknown error code '{}'".format(code))
 
     b = bytearray()
     b.extend(Opcodes['ERROR'].to_bytes(2, 'big'))
@@ -84,16 +85,16 @@ def packERROR(code, msg):
 def packDATA(data, blockNum):
     """Returns byte-formatted DATA packet"""
     b = bytearray()
-    b.extebd(Opcodes['DATA'].to_bytes(2, 'big'))
+    b.extend(Opcodes['DATA'].to_bytes(2, 'big'))
     b.extend(blockNum.to_bytes(2, 'big'))
-    b.extend(bytes(data))
+    b.extend(bytes(data, 'utf-8'))
     return b
 
 def unpackDATA(packet):
     """Returns tuple of (Opcode, BlockNum, Data)"""
     opcode = unpackOpcode(packet)
     if opcode != Opcodes['DATA']:
-        raise IllegalOperationException(
+        raise ErrorIllegalOperation(
             "Expected DATA packet, but got '{0}'"\
             .format(Opcodes[opcode]))
 
@@ -105,26 +106,26 @@ def unpackRWRQ(packet):
     """Returns a tuple of (Opcode, Filename, Mode)"""
     opcode = unpackOpcode(packet)
     if opcode not in (Opcodes['RRQ'], Opcodes['WRQ']):
-        raise IllegalOperationException(
+        raise ErrorIllegalOperation(
             "Expected RRQ or WRQ but got '{0}'"\
             .format(Opcodes[c]))
 
     s = 2
     e = packet.find(0, s)
     if e < s:
-        raise MalformedPacketException("Couldn't find filename termination byte")
+        raise ErrorMalformedPacket("Couldn't find filename termination byte")
     filename = packet[s:e].decode('utf-8')
 
     s = e + 1
     e = packet.find(0, s)
     if e < s:
-        raise MalformedPacketException("Couldn't find mode termination byte")
+        raise ErrorMalformedPacket("Couldn't find mode termination byte")
     mode = packet[s:e].decode('utf-8')
 
     if not filename:
         raise storage.EmptyPathException("Filename cannot be empty")
     elif mode.upper() not in Modes:
-        raise UnknownModeException(
+        raise ErrorUnknownMode(
             "Mode '{}' not recognized"\
             .format(mode))
     return (opcode, filename, mode.upper())
@@ -133,7 +134,7 @@ def unpackACK(packet):
     """Returns a tuple of (Opcode, BlockNum)"""
     opcode = unpackOpcode(packet)
     if opcode != Opcodes['ACK']:
-        raise IllegalOperationException(
+        raise ErrorIllegalOperation(
             "Expected ACK packet, but got '{0}'"\
             .format(Opcodes[opcode]))
 
@@ -155,8 +156,7 @@ def logClientError(address, error):
         "Sent error to Client [{0}]: {1}"\
         .format(address[0], error))
 
-def sendData(address, socket, data, blockNum):
-    data = packDATA(data, blockNum)
+def sendData(address, socket, data):
     socket.sendto(data, address)
 
 def handleRRQ(address, socket, filename, mode):
@@ -167,7 +167,7 @@ def handleRRQ(address, socket, filename, mode):
 
     try:
         file = store.get(filename)
-    except (storage.FileNotFoundException, storage.EmptyPathException) as ex:
+    except (storage.ErrorFileNotFound, storage.ErrorEmptyPath) as ex:
         err = packERROR(
             Errors['FILE_NOT_FOUND'],
             str(ex))
@@ -181,6 +181,7 @@ def handleRRQ(address, socket, filename, mode):
     dataBlock = 0
     ackBlock = 0
     fileSize = len(file)
+    sendCount = 0
     # s and e are initially incremented by 512 to give data[0:512] slice
     s = -512
     e = 0
@@ -194,11 +195,24 @@ def handleRRQ(address, socket, filename, mode):
             e += 512
             if e > fileSize:
                 e = -1
-            data = file[s:e]
+
+            data = packDATA(file[s:e], dataBlock)
             sendDATA = True
             logging.debug(
                 "Client [{0}]: Creating datablock [{1}] on file {2}[{3}:{4}]"\
                 .format(address, dataBlock, filename, s, e))
+
+        if sendCount >= MAX_BLOCK_SEND_ATTEMPTS:
+            err = packERROR(
+                Errors['ACCESS_VIOLATION'],
+                "Maximum number of block send attempts reached: [{}]"\
+                .format(sendCount))
+            sendError(address, socket, err)
+            logClientError(
+                address,
+                "Maximum number of block send attempts reached: [{}]"\
+                .format(sendCount))
+            return
 
         # We're sending a DATA packet
         if sendDATA:
@@ -206,11 +220,12 @@ def handleRRQ(address, socket, filename, mode):
                 logging.debug(
                     "Client [{0}]: Sending datablock [{1}]"\
                     .format(address, dataBlock))
-                sendData(address, socket, dataBlock, data)
+                sendData(address, socket, data)
                 sendDATA = False
                 readACK = True
+                sendCount += 1
             # Assume that a send timeout is a closed connection
-            except socket.Timeout as ex:
+            except socket.timeout as ex:
                 # Try at least to alert the client before closing connection
                 err = packERROR(
                     Errors['NOT_DEFINED'],
@@ -232,6 +247,7 @@ def handleRRQ(address, socket, filename, mode):
                     if block == dataBlock:
                         ackBlock = block
                         readACK = False
+                        sendCount = 0
                         logging.debug(
                             "Client [{0}]: Received ACK for datablock [{1}]"\
                             .format(address, block))
@@ -240,7 +256,7 @@ def handleRRQ(address, socket, filename, mode):
                             "Client [{0}]: Received ACK [{1}] for datablock [{2}]"\
                             + " Still waiting for ACK [{2}]"\
                             .format(address, block, dataBlock))
-                except IllegalOperationException as ex:
+                except ErrorIllegalOperation as ex:
                     err = packERROR(
                         Errors['ILLEGAL_OPERATION'],
                         str(ex))
@@ -248,7 +264,7 @@ def handleRRQ(address, socket, filename, mode):
                     logClientError(address, ex)
                     return
             # If we've timed out waiting for ACK, resend DATA
-            except socket.Timeout:
+            except socket.timeout:
                 readACK = False
                 sendDATA = True
                 logging.debug(
@@ -274,7 +290,7 @@ class Handler(socketserver.BaseRequestHandler):
 
         try:
             opcode, filename, mode = unpackRWRQ(packet)
-        except UnknownModeException as ex:
+        except ErrorUnknownMode as ex:
             err = packERROR(
                 Errors['ACCESS_VIOLATION'],
                 str(ex))
@@ -288,7 +304,7 @@ class Handler(socketserver.BaseRequestHandler):
             sendError(self.client_address, socket, err)
             logClientError(self.client_address, err)
             return
-        except (IllegalOperationException, UnknownOpcodeException) as ex:
+        except (ErrorIllegalOperation, ErrorUnknownOpcode) as ex:
             err = packERROR(
                 Errors['ILLEGAL_OPERATION'],
                 str(ex))

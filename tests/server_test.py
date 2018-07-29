@@ -1,8 +1,10 @@
 import unittest
+import uuid
 import context
 import threading
 import socket
 import tftp.server as server
+import tftp.storage as storage
 
 class TestHandlerHelpers(unittest.TestCase):
     """Testing functions that do not need a server to be instantiated"""
@@ -29,27 +31,27 @@ class TestHandlerHelpers(unittest.TestCase):
 
         # Test Opcode 0
         self.assertRaises(
-            server.UnknownOpcodeException,
+            server.ErrorUnknownOpcode,
             server.unpackOpcode,
             b)
 
         # Test Opcode 6
         b[1] = 6
         self.assertRaises(
-            server.UnknownOpcodeException,
+            server.ErrorUnknownOpcode,
             server.unpackOpcode,
             b)
 
     def test_UnknownErrorCodes(self):
         self.assertRaises(
-            server.UnknownErrorCodeException,
+            server.ErrorUnknownErrorCode,
             server.packERROR,
             -1,
             "Cabbage Icecream!"
             )
 
         self.assertRaises(
-            server.UnknownErrorCodeException,
+            server.ErrorUnknownErrorCode,
             server.packERROR,
             8,
             "Cabbage Icecream!"
@@ -81,9 +83,14 @@ class TestServer(unittest.TestCase):
         self.server.server_close()
 
     def test_handleRRQ(self):
+        store = storage.Storage()
+        file = str(uuid.uuid1()) * 100
+        fileName = 'my_file'
+        store.put(fileName, file)
+
         b = bytearray()
         b.extend(int(1).to_bytes(2, 'big'))
-        b.extend(bytes('my_file', 'ascii'))
+        b.extend(bytes(fileName, 'ascii'))
         b.append(0)
         b.extend(bytes('netascii', 'ascii'))
         b.append(0)

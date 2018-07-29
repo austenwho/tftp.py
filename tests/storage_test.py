@@ -12,20 +12,20 @@ class TestStorage(unittest.TestCase):
     def test_getEmptyPath(self):
         a = storage.Storage()
         self.assertRaises(
-            storage.EmptyPathException,
+            storage.ErrorEmptyPath,
             a.get)
 
     def test_getFileNotFound(self):
         a = storage.Storage()
         self.assertRaises(
-            storage.FileNotFoundException,
+            storage.ErrorFileNotFound,
             a.get,
             "not_a_file")
 
     def test_putEmptyPath(self):
         a = storage.Storage()
         self.assertRaises(
-            storage.EmptyPathException,
+            storage.ErrorEmptyPath,
             a.put)
 
     def test_putCreatesFile(self):
@@ -50,7 +50,7 @@ class TestStorage(unittest.TestCase):
         a.put(fileName, file)
         self.assertIn(fileName, a.store)
         self.assertRaises(
-            storage.FileExistsException,
+            storage.ErrorFileExists,
             a.put,
             fileName)
 

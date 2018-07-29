@@ -1,12 +1,12 @@
 import threading
 
-class EmptyPathException(Exception):
+class ErrorEmptyPath(Exception):
     pass
 
-class FileNotFoundException(Exception):
+class ErrorFileNotFound(Exception):
     pass
 
-class FileExistsException(Exception):
+class ErrorFileExists(Exception):
     pass
 
 class Storage(object):
@@ -25,18 +25,18 @@ class Storage(object):
 
         def get(self, path=None):
             if not path:
-                raise EmptyPathException("Must supply a file path!")
+                raise ErrorEmptyPath("Must supply a file path!")
             with self.mutex:
                 if path in self.store:
                     return self.store[path]
                 else:
-                    raise FileNotFoundException("No such file '{}'".format(path))
+                    raise ErrorFileNotFound("No such file '{}'".format(path))
 
         def put(self, path=None, file=None):
             if not path:
-                raise EmptyPathException("Must supply a file path!")
+                raise ErrorEmptyPath("Must supply a file path!")
             with self.mutex:
                 if path in self.store:
-                    raise FileExistsException("File '{}' already exists!".format(path))
+                    raise ErrorFileExists("File '{}' already exists!".format(path))
                 else:
                     self.store[path] = file

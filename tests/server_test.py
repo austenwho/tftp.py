@@ -84,20 +84,38 @@ class TestServer(unittest.TestCase):
 
     def test_handleRRQ(self):
         store = storage.Storage()
-        file = str(uuid.uuid1()) * 100
+        file = str(uuid.uuid1())
+        # Guarantee file is at least 2 data packets long
+        file = file * ((512//len(file)) + 1)
         fileName = 'my_file'
         store.put(fileName, file)
 
+        # Build and send RRQ packet
         b = bytearray()
         b.extend(int(1).to_bytes(2, 'big'))
         b.extend(bytes(fileName, 'ascii'))
         b.append(0)
         b.extend(bytes('netascii', 'ascii'))
         b.append(0)
-
         self.client.sendto(b, self.send_to)
+
+        # Get data block #1
         answer = self.client.recv(1024)
         print("\n{}\n".format(answer))
+
+        # Build ACK packet for data block #1
+        a = bytearray()
+        a.extend(int(4).to_bytes(2, 'big'))
+        a.extend(int(1).to_bytes(2, 'big'))
+        self.client.sendto(a, self.send_to)
+
+        # Get data block #2
+        answer = self.client.recv(1024)
+        print("\n{}\n".format(answer))
+
+        # Build and send ACK for data block #2
+        a[3] = 2
+        self.client.sendto(a, self.send_to)
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,6 +4,8 @@ import socketserver
 import tftp.storage as storage
 import threading
 
+logging.basicConfig(format='%(asctime)s -- %(levelname)s: %(message)s', level=logging.DEBUG)
+
 SOCKET_TIMEOUT = 5.0
 MAX_BLOCK_SEND_ATTEMPTS = 10
 
@@ -108,7 +110,7 @@ def unpackRWRQ(packet):
     if opcode not in (Opcodes['RRQ'], Opcodes['WRQ']):
         raise ErrorIllegalOperation(
             "Expected RRQ or WRQ but got '{0}'"\
-            .format(Opcodes[c]))
+            .format(Opcodes[opcode]))
 
     s = 2
     e = packet.find(0, s)
@@ -138,7 +140,7 @@ def unpackACK(packet):
             "Expected ACK packet, but got '{0}'"\
             .format(Opcodes[opcode]))
 
-    blockNum = int.from_bytes(packet[2:4])
+    blockNum = int.from_bytes(packet[2:4], 'big')
     return (opcode, blockNum)
 
 def packACK(blockNum):
@@ -148,21 +150,21 @@ def packACK(blockNum):
     b.extend(blockNum.to_bytes(2, 'big'))
     return b
 
-def sendError(address, socket, err):
-    socket.sendto(err, address)
+def sendError(address, sock, err):
+    sock.sendto(err, address)
 
 def logClientError(address, error):
     logging.info(
-        "Sent error to Client [{0}]: {1}"\
-        .format(address[0], error))
+        "Sent error to Client [{0}:{1}]: {2}"\
+        .format(address[0], address[1], error))
 
-def sendData(address, socket, data):
-    socket.sendto(data, address)
+def sendData(address, sock, data):
+    sock.sendto(data, address)
 
-def handleRRQ(address, socket, filename, mode):
+def handleRRQ(address, sock, filename, mode):
     logging.info(
-        "Client [{0}] requested to read file [{1}] using transfer mode [{2}]"\
-        .format(address[0], filename, mode))
+        "Client [{0}:{1}] requested to read file [{2}] using transfer mode [{3}]"\
+        .format(*address, filename, mode))
     store = storage.Storage()
 
     try:
@@ -171,7 +173,7 @@ def handleRRQ(address, socket, filename, mode):
         err = packERROR(
             Errors['FILE_NOT_FOUND'],
             str(ex))
-        sendError(address, socket, err)
+        sendError(address, sock, err)
         logClientError(address, err)
         return
 
@@ -199,15 +201,15 @@ def handleRRQ(address, socket, filename, mode):
             data = packDATA(file[s:e], dataBlock)
             sendDATA = True
             logging.debug(
-                "Client [{0}]: Creating datablock [{1}] on file {2}[{3}:{4}]"\
-                .format(address, dataBlock, filename, s, e))
+                "Client [{0}:{1}]: Creating datablock [{2}] on file {3}[{4}:{5}]"\
+                .format(*address, dataBlock, filename, s, e))
 
         if sendCount >= MAX_BLOCK_SEND_ATTEMPTS:
             err = packERROR(
                 Errors['ACCESS_VIOLATION'],
                 "Maximum number of block send attempts reached: [{}]"\
                 .format(sendCount))
-            sendError(address, socket, err)
+            sendError(address, sock, err)
             logClientError(
                 address,
                 "Maximum number of block send attempts reached: [{}]"\
@@ -218,9 +220,9 @@ def handleRRQ(address, socket, filename, mode):
         if sendDATA:
             try:
                 logging.debug(
-                    "Client [{0}]: Sending datablock [{1}]"\
-                    .format(address, dataBlock))
-                sendData(address, socket, data)
+                    "Client [{0}:{1}]: Sending datablock [{2}]"\
+                    .format(*address, dataBlock))
+                sendData(address, sock, data)
                 sendDATA = False
                 readACK = True
                 sendCount += 1
@@ -230,7 +232,7 @@ def handleRRQ(address, socket, filename, mode):
                 err = packERROR(
                     Errors['NOT_DEFINED'],
                     str(ex))
-                sendError(address, socket, err)
+                sendError(address, sock, err)
                 logClientError(address, ex)
                 return
 
@@ -238,9 +240,9 @@ def handleRRQ(address, socket, filename, mode):
         if readACK:
             try:
                 logging.debug(
-                    "Client [{0}]: Receiving ACK for datablock [{1}]"\
-                    .format(address, dataBlock))
-                packet = socket.recv(1024)
+                    "Client [{0}:{1}]: Reading socket for ACK for datablock [{2}]"\
+                    .format(*address, dataBlock))
+                packet = sock.recv(1024)
                 try:
                     opcode, block = unpackACK(packet)
                     # Ignore all ACKs other than for current block
@@ -249,18 +251,18 @@ def handleRRQ(address, socket, filename, mode):
                         readACK = False
                         sendCount = 0
                         logging.debug(
-                            "Client [{0}]: Received ACK for datablock [{1}]"\
-                            .format(address, block))
+                            "Client [{0}:{1}]: Received ACK for datablock [{2}]"\
+                            .format(*address, block))
                     else:
                         logging.debug(
-                            "Client [{0}]: Received ACK [{1}] for datablock [{2}]"\
+                            "Client [{0}:{1}]: Received ACK [{2}] for datablock [{3}]"\
                             + " Still waiting for ACK [{2}]"\
-                            .format(address, block, dataBlock))
+                            .format(*address, block, dataBlock))
                 except ErrorIllegalOperation as ex:
                     err = packERROR(
                         Errors['ILLEGAL_OPERATION'],
                         str(ex))
-                    sendError(address, socket, err)
+                    sendError(address, sock, err)
                     logClientError(address, ex)
                     return
             # If we've timed out waiting for ACK, resend DATA
@@ -268,25 +270,27 @@ def handleRRQ(address, socket, filename, mode):
                 readACK = False
                 sendDATA = True
                 logging.debug(
-                    "Client [{0}]: Timed out waiting for ACK [{1}]. Resending data."\
-                    .format(address, dataBlock))
+                    "Client [{0}:{1}]: Timed out waiting for ACK [{2}]. Resending data."\
+                    .format(*address, dataBlock))
 
         # If we've acked the last block and no more data, we're done!
         if ackBlock == dataBlock and e == -1:
             logging.debug(
-                "Client [{0}]: Finished sending file {1}"\
-                .format(address, filename))
+                "Client [{0}:{1}]: Finished sending file {2}"\
+                .format(*address, filename))
+            sock.close()
             return
 
-def handleWRQ(address, socket, filename, mode):
-    socket.sendto(
+
+def handleWRQ(address, sock, filename, mode):
+    sock.sendto(
         filename,
         address)
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
-        packet, socket = self.request
-        socket.settimeout(SOCKET_TIMEOUT)
+        packet, sock = self.request
+        #sock.settimeout(SOCKET_TIMEOUT)
 
         try:
             opcode, filename, mode = unpackRWRQ(packet)
@@ -294,28 +298,28 @@ class Handler(socketserver.BaseRequestHandler):
             err = packERROR(
                 Errors['ACCESS_VIOLATION'],
                 str(ex))
-            sendError(self.client_address, socket, err)
+            sendError(self.client_address, sock, err)
             logClientError(self.client_address, err)
             return
-        except storage.EmptyPathException as ex:
+        except storage.ErrorEmptyPath as ex:
             err = packERROR(
                 Errors['FILE_NOT_FOUND'],
                 str(ex))
-            sendError(self.client_address, socket, err)
+            sendError(self.client_address, sock, err)
             logClientError(self.client_address, err)
             return
         except (ErrorIllegalOperation, ErrorUnknownOpcode) as ex:
             err = packERROR(
                 Errors['ILLEGAL_OPERATION'],
                 str(ex))
-            sendError(self.client_address, socket, err)
+            sendError(self.client_address, sock, err)
             logClientError(self.client_address, err)
             return
 
         if opcode == Opcodes['RRQ']:
-            handleRRQ(self.client_address, socket, filename, mode)
+            handleRRQ(self.client_address, sock, filename, mode)
         else:
-            handleWRQ(self.client_address, socket, filename, mode)
+            handleWRQ(self.client_address, sock, filename, mode)
 
 class Server(socketserver.ThreadingMixIn, socketserver.UDPServer):
     pass

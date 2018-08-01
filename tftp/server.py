@@ -5,8 +5,8 @@ import tftp.storage as storage
 
 logging.basicConfig(format='%(asctime)s -- %(levelname)s: %(message)s', level=logging.DEBUG)
 
-SOCKET_TIMEOUT = 5.0
-MAX_BLOCK_SEND_ATTEMPTS = 10
+DATA_BLOCK_SIZE = 512
+MAX_PACKET_SEND_ATTEMPTS = 10
 
 class ErrorUnknownOpcode(Exception):
     pass
@@ -79,7 +79,7 @@ def packERROR(code, msg):
     b = bytearray()
     b.extend(Opcodes['ERROR'].to_bytes(2, 'big'))
     b.extend(code.to_bytes(2, 'big'))
-    b.extend(bytes(msg, 'ascii'))
+    b.extend(bytes(msg, 'utf-8'))
     b.append(0)
     return b
 
@@ -100,8 +100,11 @@ def unpackDATA(packet):
             "Expected DATA packet, but got '{0}'"\
             .format(Opcodes[opcode]))
 
+    if len(packet) < 4:
+        raise ErrorMalformedPacket("Data packet missing block number")
+
     blockNum = int.from_bytes(packet[2:4], 'big')
-    data = packet[4:]
+    data = packet[4:].decode('utf-8')
     return (opcode, blockNum, data)
 
 def unpackRWRQ(packet):
@@ -125,7 +128,7 @@ def unpackRWRQ(packet):
     mode = packet[s:e].decode('utf-8')
 
     if not filename:
-        raise storage.EmptyPathException("Filename cannot be empty")
+        raise storage.ErrorEmptyPath("Filename cannot be empty")
     elif mode.upper() not in Modes:
         raise ErrorUnknownMode(
             "Mode '{}' not recognized"\
@@ -146,17 +149,48 @@ def unpackACK(packet):
 def packACK(blockNum):
     """Returns a byte-formatted ACK packet"""
     b = bytearray()
-    b.extend(Opcode['ACK'].to_bytes(2, 'big'))
+    b.extend(Opcodes['ACK'].to_bytes(2, 'big'))
     b.extend(blockNum.to_bytes(2, 'big'))
     return b
 
 def logClientError(address, error):
+    """logClientError takes an address tuple of (address, port)
+    and an error message, formats a logline when an error message
+    is handled and delivered to the client.
+    """
     logging.info(
         "Sent error to Client [{0}:{1}]: {2}"\
         .format(address[0], address[1], error))
 
-def sendData(address, sock, data):
-    sock.sendto(data, address)
+def encodeNetascii(data):
+    """TFTP adopts the modifications to US-ASCII from RFC-764 Telnet
+    specification for transmission of newline characters. With the exception
+    of stand-alone carrage return characters, all newlines must be converted
+    into CR-LF sequences. Stand-alone carrage returns must have a null byte
+    added in sequence (CR-NULL).
+    """
+    CR = 0x0D
+    LF = 0x0A
+    last = None
+    out = bytearray()
+    for i, b in enumerate(data):
+        if b == CR:
+            if data[i+1] != LF and last != LF:
+                out.append(CR)
+                out.append(0)
+                # Must zero-out last in cases where CR-LF-CR-...
+                last = None
+                continue
+        elif b == LF:
+            if last != CR and data[i+1] != CR:
+                out.append(CR)
+                out.append(LF)
+                # Must zero-out last in cases where LF-CR-LF-...
+                last = None
+                continue
+
+        out.append(b)
+        last = b
 
 def handleRRQ(address, sock, filename, mode):
     logging.info(
@@ -170,8 +204,8 @@ def handleRRQ(address, sock, filename, mode):
         err = packERROR(
             Errors['FILE_NOT_FOUND'],
             str(ex))
-        sendData(address, sock, err)
-        logClientError(address, err)
+        sock.sendto(err, address)
+        logClientError(address, ex)
         return
 
     data = None
@@ -202,15 +236,15 @@ def handleRRQ(address, sock, filename, mode):
                 .format(*address, dataBlock, filename, start, end))
 
         # Don't loop forever trying to send the same data packet
-        if sendCount >= MAX_BLOCK_SEND_ATTEMPTS:
+        if sendCount >= MAX_PACKET_SEND_ATTEMPTS:
             err = packERROR(
                 Errors['ACCESS_VIOLATION'],
-                "Maximum number of block send attempts reached: [{}]"\
+                "Maximum number of packet send attempts reached: [{}]"\
                 .format(sendCount))
-            sendData(address, sock, err)
+            sock.sendto(err, address)
             logClientError(
                 address,
-                "Maximum number of block send attempts reached: [{}]"\
+                "Maximum number of packet send attempts reached: [{}]"\
                 .format(sendCount))
             return
 
@@ -219,7 +253,7 @@ def handleRRQ(address, sock, filename, mode):
             logging.debug(
                 "Client [{0}:{1}]: Sending datablock [{2}]"\
                 .format(*address, dataBlock))
-            sendData(address, sock, data)
+            sock.sendto(data, address)
             sendDATA = False
             readACK = True
             sendCount += 1
@@ -257,7 +291,7 @@ def handleRRQ(address, sock, filename, mode):
                     err = packERROR(
                         Errors['ILLEGAL_OPERATION'],
                         str(ex))
-                    sendData(address, sock, err)
+                    sock.sendto(err, address)
                     logClientError(address, ex)
                     return
 
@@ -271,9 +305,113 @@ def handleRRQ(address, sock, filename, mode):
 
 
 def handleWRQ(address, sock, filename, mode):
-    sock.sendto(
-        filename,
-        address)
+    """Acknowleges WRQ request by sending ACK[0] packet to client.
+    Reads DATA from sock until len(DATA) < 512.
+    ACKs each DATA packet with DATA's block number.
+    """
+    logging.info(
+        "Client [{0}:{1}] requested to put file [{2}] using transfer mode [{3}]"\
+        .format(*address, filename, mode))
+    store = storage.Storage()
+
+    if filename in store.store:
+        err = packERROR(
+            Errors['FILE_EXISTS'],
+            "File '{}' already exists".format(filename))
+        sock.sendto(err, address)
+        logClientError(
+            address,
+            "File '{}' already exists".format(filename))
+        return
+
+    file = ""
+    ackBlock = -1
+    dataBlock = 0
+    sendCount = 0
+    sendACK = False
+    readDATA = False
+    terminateTransfer = False
+
+    while True:
+        # Build a new ACK packet to acknowledge received DATA packet
+        if ackBlock != dataBlock:
+            logging.debug(
+                "Client [{0}:{1}]: Updating ACK [{2}] to ACK [{3}]"\
+                .format(*address, ackBlock, dataBlock))
+            ackBlock += 1
+            ack = packACK(ackBlock)
+            sendACK = True
+
+        # Send ACK
+        if sendACK:
+            try:
+                logging.debug(
+                    "Client [{0}:{1}]: Sending ACK [{2}]"\
+                    .format(*address, ackBlock))
+                sock.sendto(ack, address)
+                sendCount += 1
+                sendACK = False
+                readDATA = True
+            except ex:
+                logging.error("Socket send error during WRQ sendACK: {}".format(ex))
+                return
+
+            # File transfer is terminated by acknowledging the last data packet
+            if terminateTransfer:
+                logging.debug(
+                    "Client [{0}:{1}]: Terminating transfer. Writing [{2}] bytes of '{3}'"\
+                    .format(*address, len(file), filename))
+                store.put(filename, file)
+                return
+
+        # Don't try and send ACK packets for ever...
+        if sendCount >= MAX_PACKET_SEND_ATTEMPTS:
+            err = packERROR(
+                Errors['ACCESS_VIOLATION'],
+                "Maximum number of packet send attempts reached: [{}]"\
+                .format(sendCount))
+            try:
+                sock.sendto(err, address)
+                logClientError(
+                    address,
+                    "Maximum number of packet send attempts reached: [{}]"\
+                    .format(sendCount))
+            except Exception as ex:
+                logging.error(
+                    "Socket send error during WRQ sendCount: {}"\
+                    .format(ex))
+            return
+
+        # Read DATA
+        if readDATA:
+            packet = sock.recv(1024)
+            if packet:
+                try:
+                    opcode, block, chunk = unpackDATA(packet)
+                except (ErrorMalformedPacket, ErrorIllegalOperation) as ex:
+                    err = packERROR(
+                        Errors['ILLEGAL_OPERATION'],
+                        str(ex))
+                    sock.sendto(err, address)
+                    logClientError(address, ex)
+                    return
+
+                if block == dataBlock + 1:
+                    logging.debug(
+                        "Client [{0}:{1}]: Reading DATA [{2}]"\
+                        .format(*address, block))
+                    sendCount = 0
+                    dataBlock = block
+                    # Chunk could be zero-length if last packet
+                    if chunk:
+                        file += chunk
+
+                    if len(chunk) < DATA_BLOCK_SIZE:
+                        terminateTransfer = True
+                else:
+                    logging.debug(
+                        "Client [{0}:{1}]: Received duplicate DATA [{2}] Still waiting for DATA [{3}]"\
+                        .format(*address, block, dataBlock + 1))
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -285,21 +423,21 @@ class Handler(socketserver.BaseRequestHandler):
             err = packERROR(
                 Errors['ACCESS_VIOLATION'],
                 str(ex))
-            sendData(self.client_address, sock, err)
+            sock.sendto(err, self.client_address)
             logClientError(self.client_address, err)
             return
         except storage.ErrorEmptyPath as ex:
             err = packERROR(
                 Errors['FILE_NOT_FOUND'],
                 str(ex))
-            sendData(self.client_address, sock, err)
+            sock.sendto(err, self.client_address)
             logClientError(self.client_address, err)
             return
         except (ErrorIllegalOperation, ErrorUnknownOpcode) as ex:
             err = packERROR(
                 Errors['ILLEGAL_OPERATION'],
                 str(ex))
-            sendData(self.client_address, sock, err)
+            sock.sendto(err, self.client_address)
             logClientError(self.client_address, err)
             return
 

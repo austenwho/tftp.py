@@ -246,7 +246,7 @@ class TestHandlerHelpers(unittest.TestCase):
 
 class TestServer(unittest.TestCase):
     def setUp(self):
-        self.server = server.Server(('localhost',0), server.Handler)
+        self.server = socketserver.UDPServer(('localhost',0), server.Handler)
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.send_to = self.server.server_address
         self.client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -359,5 +359,6 @@ class TestServer(unittest.TestCase):
 
         wFile = store.get(fileName)
         self.assertEqual(wFile, file)
+        
 if __name__ == '__main__':
     unittest.main()

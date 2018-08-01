@@ -1,15 +1,15 @@
 import logging
-import socket
 import socketserver
-import tftp.server
+import server
 
-logging.basicConfig(format='%(asctime)s -- %(levelname)s: %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s -- %(levelname)s: %(message)s',
+    level=logging.DEBUG)
 
 HOST = 'localhost'
 PORT = 69
 
-def main():
-    print("Hello, I'm about to be a TFTP server!")
-
 if __name__ == '__main__':
-    main()
+    logging.info("Starting TFTP server on {0}:{1}".format(HOST, PORT))
+    srv = socketserver.UDPServer((HOST, PORT), server.Handler)
+    srv.serve_forever()

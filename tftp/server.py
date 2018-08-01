@@ -1,9 +1,7 @@
 import logging
 import socket
 import socketserver
-import tftp.storage as storage
-
-logging.basicConfig(format='%(asctime)s -- %(levelname)s: %(message)s', level=logging.DEBUG)
+import storage
 
 DATA_BLOCK_SIZE = 512
 MAX_PACKET_SEND_ATTEMPTS = 10
@@ -416,7 +414,7 @@ def handleWRQ(address, sock, filename, mode):
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         packet, sock = self.request
-
+        logging.debug("Receiving packet from client: {}".format(packet))
         try:
             opcode, filename, mode = unpackRWRQ(packet)
         except ErrorUnknownMode as ex:
@@ -445,6 +443,3 @@ class Handler(socketserver.BaseRequestHandler):
             handleRRQ(self.client_address, sock, filename, mode)
         else:
             handleWRQ(self.client_address, sock, filename, mode)
-
-class Server(socketserver.UDPServer):
-    pass

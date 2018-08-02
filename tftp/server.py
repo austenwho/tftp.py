@@ -87,7 +87,7 @@ def packDATA(data, blockNum):
     b.extend(Opcodes['DATA'].to_bytes(2, 'big'))
     b.extend(blockNum.to_bytes(2, 'big'))
     if data:
-        b.extend(bytes(data, 'utf-8'))
+        b.extend(data)
     return b
 
 def unpackDATA(packet):
@@ -102,7 +102,7 @@ def unpackDATA(packet):
         raise ErrorMalformedPacket("Data packet missing block number")
 
     blockNum = int.from_bytes(packet[2:4], 'big')
-    data = packet[4:].decode('utf-8')
+    data = packet[4:]
     return (opcode, blockNum, data)
 
 def unpackRWRQ(packet):
@@ -225,7 +225,7 @@ def handleRRQ(address, sock, filename, mode):
             start += 512
             end += 512
             if end > fileSize:
-                end = -1
+                end = None
 
             data = packDATA(file[start:end], dataBlock)
             sendDATA = True
@@ -294,7 +294,7 @@ def handleRRQ(address, sock, filename, mode):
                     return
 
         # If we've acked the last block and no more data, we're done!
-        if ackBlock == dataBlock and end == -1:
+        if ackBlock == dataBlock and end == None:
             logging.debug(
                 "Client [{0}:{1}]: Finished sending file {2}"\
                 .format(*address, filename))
@@ -322,7 +322,7 @@ def handleWRQ(address, sock, filename, mode):
             "File '{}' already exists".format(filename))
         return
 
-    file = ""
+    file = bytearray()
     ackBlock = -1
     dataBlock = 0
     sendCount = 0
@@ -403,7 +403,7 @@ def handleWRQ(address, sock, filename, mode):
                     dataBlock = block
                     # Chunk could be zero-length if last packet
                     if chunk:
-                        file += chunk
+                        file.extend(chunk)
 
                     if len(chunk) < DATA_BLOCK_SIZE:
                         terminateTransfer = True

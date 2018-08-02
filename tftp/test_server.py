@@ -76,33 +76,36 @@ class TestHandlerHelpers(unittest.TestCase):
 
     def test_packDATA_withData(self):
         blockNum = 55
-        data = str(uuid.uuid1())
+        d = str(uuid.uuid1())
+        data = bytes(d, 'utf-8')
         b = bytearray()
         b.extend(server.Opcodes['DATA'].to_bytes(2, 'big'))
         b.extend(blockNum.to_bytes(2, 'big'))
-        b.extend(bytes(data, 'utf-8'))
+        b.extend(data)
 
         dp = server.packDATA(data, blockNum)
         self.assertEqual(dp, b)
 
     def test_packDATA_zeroLength(self):
         blockNum = 55
-        data = ""
+        data = bytearray()
         b = bytearray()
         b.extend(server.Opcodes['DATA'].to_bytes(2, 'big'))
         b.extend(blockNum.to_bytes(2, 'big'))
-        b.extend(bytes(data, 'utf-8'))
+        b.extend(data)
 
         dp = server.packDATA(data, blockNum)
         self.assertEqual(dp, b)
 
     def test_unpackDATA_withData(self):
         blockNum = 55
-        data = str(uuid.uuid1())
+        d = str(uuid.uuid1())
+        data = bytearray()
+        data.extend(bytes(d, 'utf-8'))
         b = bytearray()
         b.extend(server.Opcodes['DATA'].to_bytes(2, 'big'))
         b.extend(blockNum.to_bytes(2, 'big'))
-        b.extend(bytes(data, 'utf-8'))
+        b.extend(data)
 
         tOp, tBlock, tData = server.unpackDATA(b)
         self.assertEqual(tOp, server.Opcodes['DATA'])
@@ -264,9 +267,11 @@ class TestServer(unittest.TestCase):
 
     def test_handleRRQ(self):
         store = storage.Storage()
-        file = str(uuid.uuid1())
+        d = str(uuid.uuid1())
         # Guarantee file is at least 2 data packets long
-        file = (file * 512)[:1024]
+        d = (d * 512)[:1024]
+        file = bytearray()
+        file.extend(bytes(d, 'utf-8'))
         fileName = 'my_file'
         store.put(fileName, file)
 
@@ -302,15 +307,17 @@ class TestServer(unittest.TestCase):
         a[3] = 3
         self.client.sendto(a, self.send_to)
 
-        self.assertEqual(answer1.decode('utf-8')[4:], file[0:512])
-        self.assertEqual(answer2.decode('utf-8')[4:], file[512:1024])
-        self.assertEqual(answer3.decode('utf-8')[4:], file[1024:-1])
+        self.assertEqual(answer1[4:], file[0:512])
+        self.assertEqual(answer2[4:], file[512:1024])
+        self.assertEqual(answer3[4:], file[1024:])
 
     def test_handleWRQ(self):
         store = storage.Storage()
-        file = str(uuid.uuid1())
+        d = str(uuid.uuid1())
         # Guarantee file is at least 2 data packets long
-        file = (file * 512)[:1024]
+        d = (d * 512)[:1024] + "\r"
+        file = bytearray()
+        file.extend(bytes(d, 'utf-8'))
         fileName = 'writing_file'
 
         # Build and send RRQ packet
@@ -330,7 +337,7 @@ class TestServer(unittest.TestCase):
         a = bytearray()
         a.extend(server.Opcodes['DATA'].to_bytes(2, 'big'))
         a.extend(dataBlock.to_bytes(2, 'big'))
-        a.extend(bytes(file[0:512], 'utf-8'))
+        a.extend(file[0:512])
         self.client.sendto(a, self.send_to)
 
         # Get ACK block #1
@@ -341,7 +348,7 @@ class TestServer(unittest.TestCase):
         a2 = bytearray()
         a2.extend(server.Opcodes['DATA'].to_bytes(2, 'big'))
         a2.extend(dataBlock.to_bytes(2, 'big'))
-        a2.extend(bytes(file[512:1024], 'utf-8'))
+        a2.extend(file[512:1024])
         self.client.sendto(a2, self.send_to)
 
         # Get data block #2
@@ -352,7 +359,7 @@ class TestServer(unittest.TestCase):
         a3 = bytearray()
         a3.extend(server.Opcodes['DATA'].to_bytes(2, 'big'))
         a3.extend(dataBlock.to_bytes(2, 'big'))
-        a3.extend(bytes(file[1024:-1], 'utf-8'))
+        a3.extend(file[1024:])
         self.client.sendto(a3, self.send_to)
 
         answer4 = self.client.recv(1024)
@@ -388,13 +395,13 @@ class TestServer(unittest.TestCase):
         ak[3] = 3
         self.client.sendto(ak, self.send_to)
 
-        data = ""
+        data = bytearray()
         op, block, d = server.unpackDATA(d1)
-        data += d
+        data.extend(d)
         op, block, d = server.unpackDATA(d2)
-        data += d
+        data.extend(d)
         op, block, d = server.unpackDATA(d3)
-        data += d
+        data.extend(d)
 
         self.assertEqual(data, file)
 

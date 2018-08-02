@@ -259,7 +259,7 @@ def handleRRQ(address, sock, filename, mode):
         # We're waiting for an ACK packet
         if readACK:
             logging.debug(
-                "Client [{0}:{1}]: Reading socket for ACK for datablock [{2}]"\
+                "Client [{0}:{1}]: Waiting for ACK for datablock [{2}]"\
                 .format(*address, dataBlock))
             packet = sock.recv(1024)
             if not packet:
@@ -278,8 +278,8 @@ def handleRRQ(address, sock, filename, mode):
                         readACK = False
                         sendCount = 0
                         logging.debug(
-                            "Client [{0}:{1}]: Received ACK for datablock [{2}]: {3}"\
-                            .format(*address, block, packet))
+                            "Client [{0}:{1}]: Received ACK for datablock [{2}]"\
+                            .format(*address, block))
                     else:
                         logging.debug(
                             "Client [{0}:{1}]: Received ACK [{2}] for datablock [{3}]"\
@@ -298,7 +298,7 @@ def handleRRQ(address, sock, filename, mode):
             logging.debug(
                 "Client [{0}:{1}]: Finished sending file {2}"\
                 .format(*address, filename))
-            sock.close()
+            #sock.close()
             return
 
 
@@ -360,6 +360,7 @@ def handleWRQ(address, sock, filename, mode):
                     "Client [{0}:{1}]: Terminating transfer. Writing [{2}] bytes of '{3}'"\
                     .format(*address, len(file), filename))
                 store.put(filename, file)
+                #sock.close()
                 return
 
         # Don't try and send ACK packets for ever...

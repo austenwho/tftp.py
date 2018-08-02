@@ -1,10 +1,15 @@
 import unittest
 import uuid
-import context
 import threading
 import socket
-import tftp.server as server
-import tftp.storage as storage
+import socketserver
+import server
+import storage
+import logging
+
+logging.basicConfig(
+    format='%(asctime)s -- %(levelname)s: %(message)s',
+    level=logging.DEBUG)
 
 class TestHandlerHelpers(unittest.TestCase):
     """Testing functions that do not need a server to be instantiated"""
@@ -357,8 +362,41 @@ class TestServer(unittest.TestCase):
         self.assertEqual(int.from_bytes(answer3[2:], 'big'), 2)
         self.assertEqual(int.from_bytes(answer4[2:], 'big'), 3)
 
-        wFile = store.get(fileName)
-        self.assertEqual(wFile, file)
-        
+        b = bytearray()
+        b.extend(server.Opcodes['RRQ'].to_bytes(2, 'big'))
+        b.extend(bytes(fileName, 'utf-8'))
+        b.append(0)
+        b.extend(bytes('octet', 'utf-8'))
+        b.append(0)
+
+        self.client.sendto(b, self.send_to)
+
+        d1 = self.client.recv(1024)
+
+        ak = bytearray()
+        ak.extend(server.Opcodes['ACK'].to_bytes(2, 'big'))
+        ak.extend(int(1).to_bytes(2, 'big'))
+
+        self.client.sendto(ak, self.send_to)
+        d2 = self.client.recv(1024)
+
+        ak[3] = 2
+        self.client.sendto(ak, self.send_to)
+
+        d3 = self.client.recv(1024)
+
+        ak[3] = 3
+        self.client.sendto(ak, self.send_to)
+
+        data = ""
+        op, block, d = server.unpackDATA(d1)
+        data += d
+        op, block, d = server.unpackDATA(d2)
+        data += d
+        op, block, d = server.unpackDATA(d3)
+        data += d
+
+        self.assertEqual(data, file)
+
 if __name__ == '__main__':
     unittest.main()

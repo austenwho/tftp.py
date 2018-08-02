@@ -1,7 +1,6 @@
 import unittest
-import context
 import uuid
-from tftp import storage
+import storage
 
 class TestStorage(unittest.TestCase):
     def test_singleton(self):

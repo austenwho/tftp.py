@@ -5,7 +5,7 @@ import threading
 
 logging.basicConfig(
     format='%(asctime)s -- %(levelname)s: %(message)s',
-    level=logging.DEBUG)
+    level=logging.INFO)
 
 HOST = 'localhost'
 PORT = 20069

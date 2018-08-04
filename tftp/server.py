@@ -58,7 +58,6 @@ Modes = {
 
 def unpackOpcode(packet):
     """Returns an integer corresponding to Opcode encoded in packet.
-
     Raises ErrorUnknownOpcode if Opcode is out of bounds.
     """
     c = int.from_bytes(packet[:2], byteorder='big')
@@ -68,7 +67,6 @@ def unpackOpcode(packet):
 
 def packERROR(code, msg):
     """Returns a byte-ordered TFTP Error packet based on code and msg.
-
     Raises ErrorUnknownErrorCode when code is out of bounds.
     """
     if code not in Errors:
@@ -91,7 +89,10 @@ def packDATA(data, blockNum):
     return b
 
 def unpackDATA(packet):
-    """Returns tuple of (Opcode, BlockNum, Data)"""
+    """Returns tuple of (Opcode, BlockNum, Data)
+    Raises ErrorIllegalOperation when passed a non-DATA packet
+    Raises ErrorMalformedPacket if packet is missized
+    """
     opcode = unpackOpcode(packet)
     if opcode != Opcodes['DATA']:
         raise ErrorIllegalOperation(
@@ -106,24 +107,28 @@ def unpackDATA(packet):
     return (opcode, blockNum, data)
 
 def unpackRWRQ(packet):
-    """Returns a tuple of (Opcode, Filename, Mode)"""
+    """Returns a tuple of (Opcode, Filename, Mode)
+    Raises ErrorIllegalOperation when passed a non-RRQ/WRQ packet
+    Raises ErrorMalformedPacket when missing file/mode termination byte
+    Raises ErrorEmptyPath if filename is empty
+    """
     opcode = unpackOpcode(packet)
     if opcode not in (Opcodes['RRQ'], Opcodes['WRQ']):
         raise ErrorIllegalOperation(
             "Expected RRQ or WRQ but got '{0}'"\
             .format(Opcodes[opcode]))
 
-    s = 2
-    e = packet.find(0, s)
-    if e < s:
+    start = 2
+    end = packet.find(0, start)
+    if end < start:
         raise ErrorMalformedPacket("Couldn't find filename termination byte")
-    filename = packet[s:e].decode('utf-8')
+    filename = packet[start:end].decode('utf-8')
 
-    s = e + 1
-    e = packet.find(0, s)
-    if e < s:
+    start = end + 1
+    end = packet.find(0, start)
+    if end < start:
         raise ErrorMalformedPacket("Couldn't find mode termination byte")
-    mode = packet[s:e].decode('utf-8')
+    mode = packet[start:end].decode('utf-8')
 
     if not filename:
         raise storage.ErrorEmptyPath("Filename cannot be empty")
@@ -134,7 +139,9 @@ def unpackRWRQ(packet):
     return (opcode, filename, mode.lower())
 
 def unpackACK(packet):
-    """Returns a tuple of (Opcode, BlockNum)"""
+    """Returns a tuple of (Opcode, BlockNum)
+    Raises ErrorIllegalOperation if passed a non-ACK packet
+    """
     opcode = unpackOpcode(packet)
     if opcode != Opcodes['ACK']:
         raise ErrorIllegalOperation(
@@ -158,13 +165,13 @@ def logClientError(address, error):
     """
     logging.info(
         "Sent error to Client [{0}:{1}]: {2}"\
-        .format(address[0], address[1], error))
+        .format(*address, error))
 
 def encodeNetascii(data):
     """TFTP adopts the modifications to US-ASCII from RFC-764 Telnet
     specification for transmission of newline characters. All LF
-    characters are converted into CR LF sequences, and all CR characters
-    are encoded into CR NULL sequences.
+    characters are encoded as CR LF sequences, and all CR characters
+    are encoded as CR NULL sequences.
 
     Example:
     >>> First\nSecond\r\nThird\rFourth\n\r
@@ -186,30 +193,45 @@ def encodeNetascii(data):
     return out
 
 def decodeNetascii(data):
-    """*See encodeNetascii"""
+    """TFTP adopts the modifications to US-ASCII from RFC-764 Telnet
+    specification for transmission of newline characters. All LF
+    characters are encoded as CR LF sequences, and all CR characters
+    are encoded as CR NULL sequences.
+
+    Example:
+    >>> First\r\nSecond\r\x00\r\nThird\r\x00Fourth\r\n\r\x00
+    would become:
+    >>> First\nSecond\r\nThird\rFourth\n\r
+    """
     CR = 0x0D
     LF = 0x0A
     NULL = 0x00
-    skip = False
+    skipByte = False
     lenData = len(data)
     next = None
     out = bytearray()
     for i, b in enumerate(data):
         next = None if i+1 >= lenData else data[i+1]
-        if skip:
-            skip = False
+        # skip the encoded byte
+        if skipByte:
+            skipByte = False
             continue
         if b == CR and next == LF:
             out.append(LF)
-            skip = True
+            skipByte = True
         elif b == CR and next == NULL:
             out.append(CR)
-            skip = True
+            skipByte = True
         else:
             out.append(b)
     return out
 
 def handleRRQ(address, sock, filename, mode):
+    """Acknowledges RRQ packet by sending DATA packets.
+    Each DATA packet is 4 header bytes + 512 bytes long, except for the last
+    packet which is 4 header bytes + (0 <= data bytes < 512).
+    Each transmitted DATA packet expects to receive a corresponding ACK packet.
+    """
     logging.info(
         "Client [{0}:{1}] requested to read file [{2}] using transfer mode [{3}]"\
         .format(*address, filename, mode))
@@ -437,10 +459,11 @@ def handleWRQ(address, sock, filename, mode):
                         .format(*address, block, dataBlock + 1))
 
 class Handler(socketserver.BaseRequestHandler):
+    """Main TFTP socketserver handler class"""
     def handle(self):
         packet, sock = self.request
         logging.debug("Receiving packet from client: {}".format(packet))
-        
+
         try:
             opcode, filename, mode = unpackRWRQ(packet)
         except ErrorUnknownMode as ex:

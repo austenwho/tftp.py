@@ -1,11 +1,12 @@
+import logging
 import unittest
 import uuid
-import threading
 import socket
 import socketserver
+import threading
+
 import server
 import storage
-import logging
 
 logging.basicConfig(
     format='%(asctime)s -- %(levelname)s: %(message)s',
@@ -251,6 +252,27 @@ class TestHandlerHelpers(unittest.TestCase):
         tP = server.packACK(blockNum)
         self.assertEqual(tP, b)
 
+    def test_encodeNetascii(self):
+        # UNIX newline \n
+        # Macintosh newline \r
+        # DOS newline \r\n
+        # Inverted DOS newline \n\r
+        input = b'\n\r\r\n\n\r'
+        output = bytearray(b'\r\n\r\x00\r\x00\r\n\r\n\r\x00')
+        test = server.encodeNetascii(input)
+        self.assertEqual(test, output)
+
+    def test_decodeNetascii(self):
+        # UNIX newline \n
+        # Macintosh newline \r
+        # DOS newline \r\n
+        # Inverted DOS newline \n\r
+        output = bytearray(b'\n\r\r\n\n\r')
+        input = b'\r\n\r\x00\r\x00\r\n\r\n\r\x00'
+        test = server.decodeNetascii(input)
+        self.assertEqual(test, output)
+
+
 
 class TestServer(unittest.TestCase):
     def setUp(self):
@@ -313,12 +335,21 @@ class TestServer(unittest.TestCase):
 
     def test_handleWRQ(self):
         store = storage.Storage()
+        fileName = 'writing_file'
+
         d = str(uuid.uuid1())
         # Guarantee file is at least 2 data packets long
-        d = (d * 512)[:1024] + "\r"
+        d = (d * 512)[:1024]
+
+        # file is netascii encoded for transmission
         file = bytearray()
         file.extend(bytes(d, 'utf-8'))
-        fileName = 'writing_file'
+        file.extend(b'\r\n\r\x00\r\x00\r\n\r\n\r\x00')
+
+        # file2 is netascii decoded
+        file2 = bytearray()
+        file2.extend(bytes(d, 'utf-8'))
+        file2.extend(b'\n\r\r\n\n\r')
 
         # Build and send RRQ packet
         b = bytearray()
@@ -403,7 +434,7 @@ class TestServer(unittest.TestCase):
         op, block, d = server.unpackDATA(d3)
         data.extend(d)
 
-        self.assertEqual(data, file)
+        self.assertEqual(data, file2)
 
 if __name__ == '__main__':
     unittest.main()

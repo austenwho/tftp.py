@@ -1,5 +1,4 @@
 import logging
-import socket
 import socketserver
 import storage
 
@@ -54,7 +53,8 @@ Errors = {
 Modes = {
     'OCTET': 'octet',
     'NETASCII': 'netascii',
-    'MAIL': 'mail'}
+    'octet': 'OCTET',
+    'netascii': 'NETASCII'}
 
 def unpackOpcode(packet):
     """Returns an integer corresponding to Opcode encoded in packet.
@@ -131,7 +131,7 @@ def unpackRWRQ(packet):
         raise ErrorUnknownMode(
             "Mode '{}' not recognized"\
             .format(mode))
-    return (opcode, filename, mode.upper())
+    return (opcode, filename, mode.lower())
 
 def unpackACK(packet):
     """Returns a tuple of (Opcode, BlockNum)"""
@@ -162,33 +162,52 @@ def logClientError(address, error):
 
 def encodeNetascii(data):
     """TFTP adopts the modifications to US-ASCII from RFC-764 Telnet
-    specification for transmission of newline characters. With the exception
-    of stand-alone carrage return characters, all newlines must be converted
-    into CR-LF sequences. Stand-alone carrage returns must have a null byte
-    added in sequence (CR-NULL).
+    specification for transmission of newline characters. All LF
+    characters are converted into CR LF sequences, and all CR characters
+    are encoded into CR NULL sequences.
+
+    Example:
+    >>> First\nSecond\r\nThird\rFourth\n\r
+    would become:
+    >>> First\r\nSecond\r\x00\r\nThird\r\x00Fourth\r\n\r\x00
     """
     CR = 0x0D
     LF = 0x0A
-    last = None
+    out = bytearray()
+    for b in data:
+        if b == LF:
+            out.append(CR)
+            out.append(LF)
+        elif b == CR:
+            out.append(CR)
+            out.append(0)
+        else:
+            out.append(b)
+    return out
+
+def decodeNetascii(data):
+    """*See encodeNetascii"""
+    CR = 0x0D
+    LF = 0x0A
+    NULL = 0x00
+    skip = False
+    lenData = len(data)
+    next = None
     out = bytearray()
     for i, b in enumerate(data):
-        if b == CR:
-            if data[i+1] != LF and last != LF:
-                out.append(CR)
-                out.append(0)
-                # Must zero-out last in cases where CR-LF-CR-...
-                last = None
-                continue
-        elif b == LF:
-            if last != CR and data[i+1] != CR:
-                out.append(CR)
-                out.append(LF)
-                # Must zero-out last in cases where LF-CR-LF-...
-                last = None
-                continue
-
-        out.append(b)
-        last = b
+        next = None if i+1 >= lenData else data[i+1]
+        if skip:
+            skip = False
+            continue
+        if b == CR and next == LF:
+            out.append(LF)
+            skip = True
+        elif b == CR and next == NULL:
+            out.append(CR)
+            skip = True
+        else:
+            out.append(b)
+    return out
 
 def handleRRQ(address, sock, filename, mode):
     logging.info(
@@ -205,6 +224,9 @@ def handleRRQ(address, sock, filename, mode):
         sock.sendto(err, address)
         logClientError(address, ex)
         return
+
+    if mode == Modes['NETASCII']:
+        file = encodeNetascii(file)
 
     data = None
     sendDATA = False
@@ -298,7 +320,6 @@ def handleRRQ(address, sock, filename, mode):
             logging.debug(
                 "Client [{0}:{1}]: Finished sending file {2}"\
                 .format(*address, filename))
-            #sock.close()
             return
 
 
@@ -359,8 +380,11 @@ def handleWRQ(address, sock, filename, mode):
                 logging.debug(
                     "Client [{0}:{1}]: Terminating transfer. Writing [{2}] bytes of '{3}'"\
                     .format(*address, len(file), filename))
+
+                if mode == Modes['NETASCII']:
+                    file = decodeNetascii(file)
+
                 store.put(filename, file)
-                #sock.close()
                 return
 
         # Don't try and send ACK packets for ever...
@@ -416,6 +440,7 @@ class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         packet, sock = self.request
         logging.debug("Receiving packet from client: {}".format(packet))
+        
         try:
             opcode, filename, mode = unpackRWRQ(packet)
         except ErrorUnknownMode as ex:

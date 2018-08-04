@@ -1,14 +1,17 @@
 # tftp.py
 Python implementation of [RFC-1350](https://tools.ietf.org/html/rfc1350): TFTP
 
+This project is intended for educational purposes only and holds no warranty of any kind for fitness or accuracy.
+
 ## Usage
 
-tftp.py defaults to port 20069 instead of 69 so privileged access is not requred. The current implementation of tftp.py only supports octet data transfer mode.
+tftp.py defaults to port 20069 instead of 69 so privileged access is not requred.
 
 To run:
 
 ```
-python3 tftp/tftp.py
+cd /path/to/repo/tftp.py
+python3 tftp
 ```
 
 To test, use a standard TFTP client:
@@ -21,7 +24,13 @@ tftp> trace
 tftp> put <some_localfile> <some_remotefile>
 tftp> get <some_remotefile>
 ```
+## Unit Tests
+To run unit tests (which set logging to debug):
+
+```
+cd /path/to/repo/tftp.py
+python3 -m unittest discover ./tftp
+```
 
 ## ToDo:
-- Implement NETASCII encode/deocde to complete the spec
-- Allow command-line setting of logging level
+- Allow command-line setting of logging level and listening port

@@ -276,7 +276,7 @@ class TestHandlerHelpers(unittest.TestCase):
 
 class TestServer(unittest.TestCase):
     def setUp(self):
-        self.server = socketserver.UDPServer(('localhost',0), server.Handler)
+        self.server = socketserver.ThreadingUDPServer(('localhost',0), server.Handler)
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.send_to = self.server.server_address
         self.client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -307,7 +307,7 @@ class TestServer(unittest.TestCase):
         self.client.sendto(b, self.send_to)
 
         # Get data block #1
-        answer1 = self.client.recv(1024)
+        answer1, self.send_to = self.client.recvfrom(1024)
 
         # Build ACK packet for data block #1
         a = bytearray()
@@ -316,14 +316,14 @@ class TestServer(unittest.TestCase):
         self.client.sendto(a, self.send_to)
 
         # Get data block #2
-        answer2 = self.client.recv(1024)
+        answer2, self.send_to = self.client.recvfrom(1024)
 
         # Build and send ACK for data block #2
         a[3] = 2
         self.client.sendto(a, self.send_to)
 
         # Get data block #3
-        answer3 = self.client.recv(1024)
+        answer3, self.send_to = self.client.recvfrom(1024)
 
         # Build and send ACK for data block #3
         a[3] = 3
@@ -361,7 +361,7 @@ class TestServer(unittest.TestCase):
         self.client.sendto(b, self.send_to)
 
         # Get ACK block #0
-        answer1 = self.client.recv(1024)
+        answer1, self.send_to = self.client.recvfrom(1024)
 
         # Build DATA packet for data block #1
         dataBlock = 1
@@ -372,7 +372,7 @@ class TestServer(unittest.TestCase):
         self.client.sendto(a, self.send_to)
 
         # Get ACK block #1
-        answer2 = self.client.recv(1024)
+        answer2, self.send_to = self.client.recvfrom(1024)
 
         # Build and send DATA for data block #2
         dataBlock += 1
@@ -383,7 +383,7 @@ class TestServer(unittest.TestCase):
         self.client.sendto(a2, self.send_to)
 
         # Get data block #2
-        answer3 = self.client.recv(1024)
+        answer3, self.send_to = self.client.recvfrom(1024)
 
         # Build and send DATA for data block #3
         dataBlock += 1
@@ -393,13 +393,16 @@ class TestServer(unittest.TestCase):
         a3.extend(file[1024:])
         self.client.sendto(a3, self.send_to)
 
-        answer4 = self.client.recv(1024)
+        answer4, self.send_to = self.client.recvfrom(1024)
 
         self.assertEqual(int.from_bytes(answer1[2:], 'big'), 0)
         self.assertEqual(int.from_bytes(answer2[2:], 'big'), 1)
         self.assertEqual(int.from_bytes(answer3[2:], 'big'), 2)
         self.assertEqual(int.from_bytes(answer4[2:], 'big'), 3)
 
+        self.client.close()
+        self.send_to = self.server.server_address
+        self.client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         b = bytearray()
         b.extend(server.Opcodes['RRQ'].to_bytes(2, 'big'))
         b.extend(bytes(fileName, 'utf-8'))
@@ -408,20 +411,19 @@ class TestServer(unittest.TestCase):
         b.append(0)
 
         self.client.sendto(b, self.send_to)
-
-        d1 = self.client.recv(1024)
+        d1, self.send_to = self.client.recvfrom(1024)
 
         ak = bytearray()
         ak.extend(server.Opcodes['ACK'].to_bytes(2, 'big'))
         ak.extend(int(1).to_bytes(2, 'big'))
 
         self.client.sendto(ak, self.send_to)
-        d2 = self.client.recv(1024)
+        d2, self.send_to = self.client.recvfrom(1024)
 
         ak[3] = 2
         self.client.sendto(ak, self.send_to)
 
-        d3 = self.client.recv(1024)
+        d3, self.send_to = self.client.recvfrom(1024)
 
         ak[3] = 3
         self.client.sendto(ak, self.send_to)

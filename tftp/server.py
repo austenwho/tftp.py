@@ -1,5 +1,6 @@
 import logging
 import socketserver
+import socket
 import storage
 
 DATA_BLOCK_SIZE = 512
@@ -342,6 +343,7 @@ def handleRRQ(address, sock, filename, mode):
             logging.debug(
                 "Client [{0}:{1}]: Finished sending file {2}"\
                 .format(*address, filename))
+            sock.close()
             return
 
 
@@ -403,6 +405,7 @@ def handleWRQ(address, sock, filename, mode):
                     "Client [{0}:{1}]: Terminating transfer. Writing [{2}] bytes of '{3}'"\
                     .format(*address, len(file), filename))
 
+                sock.close()
                 if mode == Modes['NETASCII']:
                     file = decodeNetascii(file)
 
@@ -488,7 +491,12 @@ class Handler(socketserver.BaseRequestHandler):
             logClientError(self.client_address, err)
             return
 
+        # Create a new UDP socket for remainder of session
+        stid = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        host = self.server.server_address[0]
+        stid.bind((host, 0))
+
         if opcode == Opcodes['RRQ']:
-            handleRRQ(self.client_address, sock, filename, mode)
+            handleRRQ(self.client_address, stid, filename, mode)
         else:
-            handleWRQ(self.client_address, sock, filename, mode)
+            handleWRQ(self.client_address, stid, filename, mode)
